@@ -177,6 +177,7 @@ func (e *Engine) Terminate() {
 	wg.Add(len(e.actors))
 
 	e.mu.Lock()
+	e.state = engineStateTerminated
 	for id, a := range e.actors {
 		go func() {
 			a.terminate()
