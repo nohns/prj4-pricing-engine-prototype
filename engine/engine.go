@@ -2,6 +2,7 @@ package engine
 
 import (
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 )
@@ -9,6 +10,8 @@ import (
 var (
 	ErrItemAlreadyTracked = errors.New("item already tracked")
 	ErrItemNotFound       = errors.New("item not found")
+	ErrQuantityBelowOne   = errors.New("quantity below one")
+	ErrItemParamsInvalid  = errors.New("item params invalid")
 )
 
 const (
@@ -37,11 +40,45 @@ func New() *Engine {
 }
 
 type ItemParams struct {
-	upperb float64
-	lowerb float64
+	MaxPrice float64
+	MinPrice float64
+
+	// StartPrice is the price of the item at the LastOrdered time.
+	StartPrice float64
+
+	// BuyMultiplier is the multiplier that decides how much the price
+	// of an item increases when exactly one is ordered.
+	BuyMultiplier float64
+
+	// HalfTime specifies the amount of time before a price reaches half
+	// its orignal price, assuming no orders placed.
+	HalfTime int
+
+	LastOrdered time.Time
 }
 
+func (ip *ItemParams) validate() error {
+    if ip.MaxPrice < ip.MinPrice {
+        return fmt.Errorf("%w: max price must be larger than min price", ErrItemParamsInvalid)
+    }
+    if ip.BuyMultiplier < 1 {
+        return fmt.Errorf("%w: buy multiplier must be larger than 1", ErrItemParamsInvalid)
+    }
+    if ip.HalfTime < 1 {
+        return fmt.Errorf("%w: half time must be greater than 1 second", ErrItemParamsInvalid)
+    }
+    if ip.MaxPrice < ip.StartPrice || ip.MinPrice > ip.StartPrice {
+        return fmt.Errorf("%w: start price must be between min and max price", ErrItemParamsInvalid)
+    }
+    return nil
+}
+
+// Track item registers an item and proceeds to track its price, when the engine starts.
 func (e *Engine) TrackItem(id string, params ItemParams) error {
+    if err := params.validate(); err != nil {
+        return err
+    }
+    
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -53,13 +90,33 @@ func (e *Engine) TrackItem(id string, params ItemParams) error {
 	return nil
 }
 
+// Order item takes the id of a given item and the quantity ordered and proceeds to
+// increase the price.
 func (e *Engine) OrderItem(id string, qty int) error {
+	if qty < 1 {
+		return ErrQuantityBelowOne
+	}
 	a, err := e.actor(id)
 	if err != nil {
 		return err
 	}
 
 	a.order(qty)
+	return nil
+}
+
+// Tweak an items param while engine is running.
+func (e *Engine) TweakItem(id string, newparams ItemParams) error {
+    if err := newparams.validate(); err != nil {
+        return err
+    }
+    
+	a, err := e.actor(id)
+	if err != nil {
+		return err
+	}
+
+	a.updateParams(newparams)
 	return nil
 }
 
@@ -80,10 +137,10 @@ func (e *Engine) ReadUpdate() PriceUpdate {
 }
 
 func (e *Engine) Start() {
-    e.mu.RLock()
-    defer e.mu.RUnlock()
+	e.mu.RLock()
+	defer e.mu.RUnlock()
 
-    for _, a := range e.actors {
-        a.start()
-    }
+	for _, a := range e.actors {
+		a.start()
+	}
 }

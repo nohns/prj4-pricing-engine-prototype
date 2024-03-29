@@ -7,18 +7,21 @@ import (
 
 const (
 	updateInterval = 30 * time.Second
-    // maxStartDelay defines the upper bound for a random start delay, so prices seem to be updating in an arbitrary order
-    maxStartDelay = 10 * time.Second
+	// maxStartDelay defines the upper bound for a random start delay, so prices seem to be updating in an arbitrary order
+	maxStartDelay = 10 * time.Second
 )
 
 type actor struct {
 	id  string
+    terminated bool
 	itm item
-	// Orders chan receives quantities ordered
+	// orders chan receives quantities ordered
 	orders chan int
-    // params chan receives updates to item parameters
-    params chan ItemParams
-	// Out chan is for writing price updates back to the engine
+	// params chan receives updates to item parameters
+	params chan ItemParams
+    // term chan terminates the actor
+    term chan struct{}
+	// out chan is for writing price updates back to the engine
 	out chan<- PriceUpdate
 	// t ticker schedules price updates to be outputted
 	t *time.Ticker
@@ -30,8 +33,9 @@ func newActor(id string, params ItemParams, out chan<- PriceUpdate) *actor {
 		itm: item{
 			params: params,
 		},
-        orders: make(chan int),
-		out: out,
+		orders: make(chan int),
+        params: make(chan ItemParams),
+		out:    out,
 	}
 }
 
@@ -40,40 +44,64 @@ func (a *actor) order(qty int) {
 	a.orders <- qty
 }
 
+// Update params notifies the actor that params should be updated
+func (a *actor) updateParams(params ItemParams) {
+	a.params <- params
+}
 
+func (a *actor) terminate() {
+    a.term <- struct{}{}
+    close(a.orders)
+    close(a.params)
+    close(a.term)
+}
+
+// Start intiates the pricing algorithm
 func (a *actor) start() {
 	go a.listen()
-    go a.primeUpdateScheduler()
+	go a.primeUpdateScheduler()
 }
 
 // prime update scheduler sleeps for a random delay between 0 and maxStartDelay, to make price updates
 // seem more random, but still with a set interval between them, so graphs look nicer.
 func (a *actor) primeUpdateScheduler() {
-    delay := time.Duration(rand.Intn(int(maxStartDelay)))
+	delay := time.Duration(rand.Intn(int(maxStartDelay)))
 	time.Sleep(delay)
-    a.t = time.NewTicker(updateInterval)
+	a.t = time.NewTicker(updateInterval)
+	a.orders <- 0 // 0 means initial order, see listen function
 }
 
 func (a *actor) listen() {
-	for {
+	for !a.terminated {
 		select {
 		case qty := <-a.orders:
 			a.handleOrderPlaced(qty)
+            // Initial order needs to produce an update
+            if qty == 0 {
+                a.emitUpdate()
+            }
 		case <-a.t.C:
-			a.handleTick()
-        case params := <-a.params:
-            a.handleParamsUpdated(params)
+			a.emitUpdate()
+		case params := <-a.params:
+			a.handleParamsUpdated(params)
+        case <-a.term:
+            a.terminated = true
 		}
 	}
 }
 
-// handleOrderPlaced handles incoming order quantities
+// handleOrderPlaced handles incoming order quantities. If quantity is a zero-value,
+// it has the semantic meaning of resetting the last order time, and nothing else.
 func (a *actor) handleOrderPlaced(qty int) {
+    if qty == 0 {
+        a.itm.reset()
+        return
+    }
 	a.itm.order(qty)
 }
 
-// handleTick outputs an update of the current price of the item tracked by the actor
-func (a *actor) handleTick() {
+// emitUpdate outputs an update of the current price of the item tracked by the actor
+func (a *actor) emitUpdate() {
 	a.out <- PriceUpdate{
 		id:    a.id,
 		price: a.itm.price(),
@@ -83,5 +111,5 @@ func (a *actor) handleTick() {
 
 // handleParamsUpdated tweaks the pricing parameters when actor is running
 func (a *actor) handleParamsUpdated(params ItemParams) {
-    a.itm.tweakParams(params)
+	a.itm.tweakParams(params)
 }
