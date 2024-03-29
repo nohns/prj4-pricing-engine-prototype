@@ -57,7 +57,7 @@ func (a *actor) terminate() {
 	close(a.orders)
 	close(a.params)
 	close(a.term)
-    a.t.Stop()
+	a.t.Stop()
 }
 
 // Start intiates the pricing algorithm
