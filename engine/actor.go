@@ -51,11 +51,13 @@ func (a *actor) updateParams(params ItemParams) {
 	a.params <- params
 }
 
+// Terminate shuts down the actor
 func (a *actor) terminate() {
 	a.term <- struct{}{}
 	close(a.orders)
 	close(a.params)
 	close(a.term)
+    a.t.Stop()
 }
 
 // Start intiates the pricing algorithm
