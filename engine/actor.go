@@ -2,6 +2,7 @@ package engine
 
 import (
 	"math/rand"
+	"sync"
 	"time"
 )
 
@@ -12,15 +13,16 @@ const (
 )
 
 type actor struct {
-	id  string
-    terminated bool
-	itm item
+	id         string
+	terminated bool
+	starter    sync.Once
+	itm        item
 	// orders chan receives quantities ordered
 	orders chan int
 	// params chan receives updates to item parameters
 	params chan ItemParams
-    // term chan terminates the actor
-    term chan struct{}
+	// term chan terminates the actor
+	term chan struct{}
 	// out chan is for writing price updates back to the engine
 	out chan<- PriceUpdate
 	// t ticker schedules price updates to be outputted
@@ -34,7 +36,7 @@ func newActor(id string, params ItemParams, out chan<- PriceUpdate) *actor {
 			params: params,
 		},
 		orders: make(chan int),
-        params: make(chan ItemParams),
+		params: make(chan ItemParams),
 		out:    out,
 	}
 }
@@ -50,19 +52,21 @@ func (a *actor) updateParams(params ItemParams) {
 }
 
 func (a *actor) terminate() {
-    a.term <- struct{}{}
-    close(a.orders)
-    close(a.params)
-    close(a.term)
+	a.term <- struct{}{}
+	close(a.orders)
+	close(a.params)
+	close(a.term)
 }
 
 // Start intiates the pricing algorithm
 func (a *actor) start() {
-	go a.listen()
-	go a.primeUpdateScheduler()
+	a.starter.Do(func() {
+		go a.listen()
+		go a.primeUpdateScheduler()
+	})
 }
 
-// prime update scheduler sleeps for a random delay between 0 and maxStartDelay, to make price updates
+// primeUpdateScheduler sleeps for a random delay between 0 and maxStartDelay, to make price updates
 // seem more random, but still with a set interval between them, so graphs look nicer.
 func (a *actor) primeUpdateScheduler() {
 	delay := time.Duration(rand.Intn(int(maxStartDelay)))
@@ -76,16 +80,16 @@ func (a *actor) listen() {
 		select {
 		case qty := <-a.orders:
 			a.handleOrderPlaced(qty)
-            // Initial order needs to produce an update
-            if qty == 0 {
-                a.emitUpdate()
-            }
+			// Initial order needs to produce a price update
+			if qty == 0 {
+				a.emitUpdate()
+			}
 		case <-a.t.C:
 			a.emitUpdate()
 		case params := <-a.params:
 			a.handleParamsUpdated(params)
-        case <-a.term:
-            a.terminated = true
+		case <-a.term:
+			a.terminated = true
 		}
 	}
 }
@@ -93,14 +97,14 @@ func (a *actor) listen() {
 // handleOrderPlaced handles incoming order quantities. If quantity is a zero-value,
 // it has the semantic meaning of resetting the last order time, and nothing else.
 func (a *actor) handleOrderPlaced(qty int) {
-    if qty == 0 {
-        a.itm.reset()
-        return
-    }
+	if qty == 0 {
+		a.itm.reset()
+		return
+	}
 	a.itm.order(qty)
 }
 
-// emitUpdate outputs an update of the current price of the item tracked by the actor
+// emitUpdate outputs an update of the current item price tracked by the actor.
 func (a *actor) emitUpdate() {
 	a.out <- PriceUpdate{
 		id:    a.id,
@@ -109,7 +113,7 @@ func (a *actor) emitUpdate() {
 	}
 }
 
-// handleParamsUpdated tweaks the pricing parameters when actor is running
+// handleParamsUpdated tweaks the pricing parameters when the actor is running.
 func (a *actor) handleParamsUpdated(params ItemParams) {
 	a.itm.tweakParams(params)
 }
