@@ -158,8 +158,8 @@ func (e *Engine) Start() error {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
-    // Engine only able to start when idling beforehand
-    // TODO: make better errors
+	// Engine only able to start when idling beforehand
+	// TODO: make better errors
 	if e.state != engineStateIdle {
 		return ErrEngineNotIdle
 	}
@@ -168,7 +168,7 @@ func (e *Engine) Start() error {
 		a.start()
 	}
 
-    return nil
+	return nil
 }
 
 // Terminate stops the tracking of items. When called, engine can no longer be used.
